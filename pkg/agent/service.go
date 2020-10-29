@@ -130,7 +130,7 @@ type Device struct {
 	MfToken string
 }
 // New returns agent service implementation.
-func New(mc paho.Client, cfg *Config, ec edgex.Client, nc *nats.Conn, logger log.Logger) (Service, error) {
+func New(mc paho.Client, cfg *Config, ec edgex.Client, nc *nats.Conn, logger log.Logger, mfxdevice Device) (Service, error) {
 	ag := &agent{
 		mqttClient:  mc,
 		edgexClient: ec,
@@ -144,16 +144,16 @@ func New(mc paho.Client, cfg *Config, ec edgex.Client, nc *nats.Conn, logger log
 	if cfg.Heartbeat.Interval <= 0 {
 		ag.logger.Error(fmt.Sprintf("invalid heartbeat interval %d", cfg.Heartbeat.Interval))
 	}
-
-	_, err := ag.nats.Subscribe(Hearbeat, func(msg *nats.Msg) {
+	subject := "channels." + mfxdevice.ControlChannel.ID + ".heartbeat.>"
+	_, err := ag.nats.Subscribe(subject, func(msg *nats.Msg) {
 		sub := msg.Subject
 		tok := strings.Split(sub, ".")
 		if len(tok) < 3 {
 			ag.logger.Error(fmt.Sprintf("Failed: Subject has incorrect length %s", sub))
 			return
 		}
-		svcname := tok[1]
-		svctype := tok[2]
+		svcname := tok[3]
+		svctype := tok[4]
 		// Service name is extracted from the subtopic
 		// if there is multiple instances of the same service
 		// we will have to add another distinction

@@ -131,21 +131,23 @@ func main() {
 	}
 	edgexClient := edgex.NewClient(cfg.Edgex.URL, logger)
 
-	svc, err := agent.New(mqttClient, &cfg, edgexClient, nc, logger)
-	if err != nil {
-		logger.Error(fmt.Sprintf("Error in agent service: %s", err))
-		os.Exit(1)
-	}
-	var mfdevice *agent.Device
+	var mfxdevice *agent.Device
 
-	mfdevice, err = genLocalThingAndChannels(cfg.BoardCfg.BoardName, cfg.BoardCfg.Token)
+	mfxdevice, err = genLocalThingAndChannels(cfg.BoardCfg.BoardName, cfg.BoardCfg.Token)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Error in genLocalThingAndChannels(): %s", err))
 		os.Exit(1)
 	}
-	updateExportFile(cfg.ExportFile, mfdevice)
-
-	svc = api.LoggingMiddleware(svc, logger)
+	err = updateExportFile(cfg.ExportFile, mfxdevice)
+	if err != nil {
+		logger.Error(fmt.Sprintf("Error in updateExportFile(): %s", err))
+		os.Exit(1)
+	}
+	svc, err := agent.New(mqttClient, &cfg, edgexClient, nc, logger, *mfxdevice)
+	if err != nil {
+		logger.Error(fmt.Sprintf("Error in agent service: %s", err))
+		os.Exit(1)
+	}
 	svc = api.MetricsMiddleware(
 		svc,
 		kitprometheus.NewCounterFrom(stdprometheus.CounterOpts{
@@ -161,7 +163,7 @@ func main() {
 			Help:      "Total duration of requests in microseconds.",
 		}, []string{"method"}),
 	)
-	b := conn.NewBroker(svc, mqttClient, cfg.Channels.Control, nc, logger, mfdevice)
+	b := conn.NewBroker(svc, mqttClient, cfg.Channels.Control, nc, logger, mfxdevice)
 	go b.Subscribe()
 
 	errs := make(chan error, 3)
