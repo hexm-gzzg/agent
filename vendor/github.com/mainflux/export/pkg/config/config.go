@@ -49,11 +49,19 @@ type Server struct {
 	CachePass string `json:"cache_pass" toml:"cache_pass" mapstructure:"port"`
 	CacheDB   string `json:"cache_db" toml:"cache_db" mapstructure:"port"`
 }
-
+type BoardConfig struct {
+	BoardName string `toml:"boardName"`
+	Token string `toml:"token"`
+	ThingID string
+	ThingKey string
+	ControlChannelID string
+	ExportChannelID string
+}
 type Config struct {
 	Server Server  `json:"exp" toml:"exp" mapstructure:"exp"`
 	Routes []Route `json:"routes" toml:"routes" mapstructure:"routes"`
 	MQTT   MQTT    `json:"mqtt" toml:"mqtt" mapstructure:"mqtt"`
+	BoardCfg  BoardConfig     `toml:"boardConfig"`
 	File   string  `json:"file"`
 }
 

@@ -12,6 +12,8 @@ import (
 
 	"github.com/mainflux/mainflux/errors"
 	"github.com/pelletier/go-toml"
+	cfg "github.com/mainflux/export/pkg/config"
+
 )
 
 type ServerConfig struct {
@@ -59,17 +61,19 @@ type TerminalConfig struct {
 }
 
 type Config struct {
-	Server    ServerConfig    `toml:"server" json:"server"`
-	Terminal  TerminalConfig  `toml:"terminal" json:"terminal"`
-	Heartbeat HeartbeatConfig `toml:"heartbeat" json:"heartbeat"`
-	Channels  ChanConfig      `toml:"channels" json:"channels"`
-	Edgex     EdgexConfig     `toml:"edgex" json:"edgex"`
-	Log       LogConfig       `toml:"log" json:"log"`
-	MQTT      MQTTConfig      `toml:"mqtt" json:"mqtt"`
-	File      string
+	Server     ServerConfig    `toml:"server" json:"server"`
+	Terminal   TerminalConfig  `toml:"terminal" json:"terminal"`
+	Heartbeat  HeartbeatConfig `toml:"heartbeat" json:"heartbeat"`
+	Channels   ChanConfig      `toml:"channels" json:"channels"`
+	Edgex      EdgexConfig     `toml:"edgex" json:"edgex"`
+	Log        LogConfig       `toml:"log" json:"log"`
+	MQTT       MQTTConfig      `toml:"mqtt" json:"mqtt"`
+	BoardCfg   cfg.BoardConfig     `toml:"boardConfig"`
+	ExportFile string          `toml:"exportFile"`
+	File       string
 }
 
-func NewConfig(sc ServerConfig, cc ChanConfig, ec EdgexConfig, lc LogConfig, mc MQTTConfig, hc HeartbeatConfig, tc TerminalConfig, file string) Config {
+func NewConfig(sc ServerConfig, cc ChanConfig, ec EdgexConfig, lc LogConfig, mc MQTTConfig, hc HeartbeatConfig, tc TerminalConfig, file string, bc cfg.BoardConfig) Config {
 	return Config{
 		Server:    sc,
 		Channels:  cc,
@@ -79,6 +83,7 @@ func NewConfig(sc ServerConfig, cc ChanConfig, ec EdgexConfig, lc LogConfig, mc 
 		Heartbeat: hc,
 		Terminal:  tc,
 		File:      file,
+		BoardCfg:  bc,
 	}
 }
 

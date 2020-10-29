@@ -65,7 +65,7 @@ type infraConfig struct {
 }
 
 // Bootstrap - Retrieve device config
-func Bootstrap(cfg Config, logger log.Logger, file string) error {
+func Bootstrap(cfg Config, logger log.Logger, file string, c agent.Config) error {
 	retries, err := strconv.ParseUint(cfg.Retries, 10, 64)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Invalid BOOTSTRAP_RETRIES value: %s", err))
@@ -128,13 +128,17 @@ func Bootstrap(cfg Config, logger log.Logger, file string) error {
 
 	hc := dc.SvcsConf.Agent.Heartbeat
 	tc := dc.SvcsConf.Agent.Terminal
-	c := agent.NewConfig(sc, cc, ec, lc, mc, hc, tc, file)
+	boardCfg := c.BoardCfg
+	nc := agent.NewConfig(sc, cc, ec, lc, mc, hc, tc, file, boardCfg)
 
-	dc.SvcsConf.Export = fillExportConfig(dc.SvcsConf.Export, c)
-
+	dc.SvcsConf.Export = fillExportConfig(dc.SvcsConf.Export, nc)
 	saveExportConfig(dc.SvcsConf.Export, logger)
+	if dc.SvcsConf.Export.File == "" {
+		dc.SvcsConf.Export.File = exportConfigFile
+	}
+	nc.ExportFile = dc.SvcsConf.Export.File
 
-	return agent.SaveConfig(c)
+	return agent.SaveConfig(nc)
 }
 
 // if export config isnt filled use agent configs
@@ -157,11 +161,15 @@ func fillExportConfig(econf export.Config, c agent.Config) export.Config {
 	if econf.MQTT.ClientPrivKeyPath == "" {
 		econf.MQTT.ClientPrivKeyPath = c.MQTT.PrivKeyPath
 	}
+	econf.BoardCfg = c.BoardCfg
+	var routeTmp []export.Route
 	for _, route := range econf.Routes {
 		if route.MqttTopic == "" {
 			route.MqttTopic = "channels/" + c.Channels.Data + "/messages"
 		}
+		routeTmp = append(routeTmp,route)
 	}
+	econf.Routes = routeTmp
 	return econf
 }
 

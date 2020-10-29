@@ -20,6 +20,7 @@ import (
 	exp "github.com/mainflux/export/pkg/config"
 	"github.com/mainflux/mainflux/errors"
 	log "github.com/mainflux/mainflux/logger"
+	sdk "github.com/mainflux/mainflux/sdk/go"
 	"github.com/nats-io/nats.go"
 )
 
@@ -120,7 +121,14 @@ type agent struct {
 	svcs        map[string]Heartbeat
 	terminals   map[string]terminal.Session
 }
-
+// Device cb
+type Device struct {
+	MfSdk sdk.SDK
+	Thing sdk.Thing
+	ControlChannel sdk.Channel
+	ExportChannel sdk.Channel
+	MfToken string
+}
 // New returns agent service implementation.
 func New(mc paho.Client, cfg *Config, ec edgex.Client, nc *nats.Conn, logger log.Logger) (Service, error) {
 	ag := &agent{

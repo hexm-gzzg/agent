@@ -21,9 +21,11 @@ import (
 	"github.com/mainflux/agent/pkg/bootstrap"
 	"github.com/mainflux/agent/pkg/conn"
 	"github.com/mainflux/agent/pkg/edgex"
+	export "github.com/mainflux/export/pkg/config"
 	"github.com/mainflux/mainflux"
 	"github.com/mainflux/mainflux/errors"
 	"github.com/mainflux/mainflux/logger"
+	sdk "github.com/mainflux/mainflux/sdk/go"
 	nats "github.com/nats-io/nats.go"
 	stdprometheus "github.com/prometheus/client_golang/prometheus"
 )
@@ -56,6 +58,8 @@ const (
 	defNatsURL                    = nats.DefaultURL
 	defHeartbeatInterval          = "10s"
 	defTermSessionTimeout         = "60s"
+	defBoardName                  = "edge"
+	defToken                      = "123456"
 	envConfigFile                 = "MF_AGENT_CONFIG_FILE"
 	envLogLevel                   = "MF_AGENT_LOG_LEVEL"
 	envEdgexURL                   = "MF_AGENT_EDGEX_URL"
@@ -71,6 +75,9 @@ const (
 	envDataChan                   = "MF_AGENT_DATA_CHANNEL"
 	envEncryption                 = "MF_AGENT_ENCRYPTION"
 	envNatsURL                    = "MF_AGENT_NATS_URL"
+	envBoardName                  = "MF_AGENT_BOARD_NAME"
+	envToken                      = "MF_AGENT_TOKEN"
+	envBoardCfgFile               = "MF_AGENT_BOARD_CFG_FILE"
 
 	envMqttUsername       = "MF_AGENT_MQTT_USERNAME"
 	envMqttPassword       = "MF_AGENT_MQTT_PASSWORD"
@@ -84,6 +91,8 @@ const (
 	envHeartbeatInterval  = "MF_AGENT_HEARTBEAT_INTERVAL"
 	envTermSessionTimeout = "MF_AGENT_TERMINAL_SESSION_TIMEOUT"
 )
+
+const contentType = "application/senml+json"
 
 var (
 	errFailedToSetupMTLS       = errors.New("Failed to set up mtls certs")
@@ -127,6 +136,14 @@ func main() {
 		logger.Error(fmt.Sprintf("Error in agent service: %s", err))
 		os.Exit(1)
 	}
+	var mfdevice *agent.Device
+
+	mfdevice, err = genLocalThingAndChannels(cfg.BoardCfg.BoardName, cfg.BoardCfg.Token)
+	if err != nil {
+		logger.Error(fmt.Sprintf("Error in genLocalThingAndChannels(): %s", err))
+		os.Exit(1)
+	}
+	updateExportFile(cfg.ExportFile, mfdevice)
 
 	svc = api.LoggingMiddleware(svc, logger)
 	svc = api.MetricsMiddleware(
@@ -144,7 +161,7 @@ func main() {
 			Help:      "Total duration of requests in microseconds.",
 		}, []string{"method"}),
 	)
-	b := conn.NewBroker(svc, mqttClient, cfg.Channels.Control, nc, logger)
+	b := conn.NewBroker(svc, mqttClient, cfg.Channels.Control, nc, logger, mfdevice)
 	go b.Subscribe()
 
 	errs := make(chan error, 3)
@@ -164,7 +181,227 @@ func main() {
 	err = <-errs
 	logger.Error(fmt.Sprintf("Agent terminated: %s", err))
 }
+func updateExportFile(exportFile string, mfxDevice *agent.Device) error {
+	c, err := export.ReadFile(exportFile)
+	if err != nil {
+		log.Fatalf(fmt.Sprintf("updateExportFile failed: %s", err))
+	}
+	for idx := range c.Routes {
+		route := &c.Routes[idx]
+		if strings.Contains(route.NatsTopic, mfxDevice.ExportChannel.ID) == false {
+			route.NatsTopic = route.NatsTopic + "." + mfxDevice.ExportChannel.ID
+		} 
+	}
+	c.BoardCfg.ThingID = mfxDevice.Thing.ID
+	c.BoardCfg.ThingKey = mfxDevice.Thing.Key
+	c.BoardCfg.ControlChannelID = mfxDevice.ControlChannel.ID
+	c.BoardCfg.ExportChannelID = mfxDevice.ExportChannel.ID
 
+	export.Save(c)
+	return nil
+}
+func genLocalThingAndChannels(deviceName string, mfToken string) (*agent.Device, error) {
+	sdkConf := sdk.Config{
+		BaseURL:           "http://127.0.0.1:8182",
+		UsersPrefix:       "",
+		ThingsPrefix:      "",
+		HTTPAdapterPrefix: "",
+		MsgContentType:    contentType,
+		TLSVerification:   false,
+	}
+	var page sdk.ThingsPage
+	var err error
+	var chanPage sdk.ChannelsPage
+	var mfThing sdk.Thing
+	var controlChannel sdk.Channel
+	var exportChannel sdk.Channel
+
+	mainfluxSDK := sdk.NewSDK(sdkConf)
+	thingName := deviceName + "_thing"
+	page, err = mainfluxSDK.Things(mfToken, 0, 5, thingName)
+	if err != nil {
+		// log.Fatalf(err.Error())
+		fmt.Println(err.Error())
+		return nil, err
+	}
+	if page.Total > 1 {
+		for _, th := range page.Things {
+			fmt.Printf("th.ID %s,th.Key %s\n", th.ID, mfToken)
+			err := mainfluxSDK.DeleteThing(th.ID, mfToken)
+			if err != nil {
+				// log.Fatalf(err.Error())
+				fmt.Println(err.Error())
+				return nil, err
+			}
+		}
+	}
+	if (page.Total == 0) || (page.Total > 1) {
+		var thing = sdk.Thing{
+			ID:   "1",
+			Name: thingName,
+		}
+		_, err = mainfluxSDK.CreateThing(thing, mfToken)
+		if err != nil {
+			log.Fatalf(err.Error())
+			fmt.Println(err)
+			return nil, err
+		}
+		page, err = mainfluxSDK.Things(mfToken, 0, 5, thing.Name)
+		if err != nil {
+			// log.Fatalf(err.Error())
+			fmt.Println(err.Error())
+		}
+	}
+	if page.Total == 1 {
+		mfThing = page.Things[0]
+	} else {
+		log.Fatalf("create things failed\n")
+	}
+	controlChanmelName := deviceName + "controlChannel"
+	chanPage, err = mainfluxSDK.Channels(mfToken, 0, 5, controlChanmelName)
+	if err != nil {
+		// log.Fatalf(err.Error())
+		fmt.Println(err.Error())
+	}
+	if chanPage.Total > 1 {
+		for _, chann := range chanPage.Channels {
+			err := mainfluxSDK.DeleteChannel(chann.ID, mfToken)
+			if err != nil {
+				// log.Fatalf(err.Error())
+				fmt.Println(err.Error())
+				return nil, err
+			}
+		}
+	}
+	if (chanPage.Total == 0) || (chanPage.Total > 1) {
+		var channel = sdk.Channel{
+			ID:   "1",
+			Name: controlChanmelName,
+		}
+		_, err = mainfluxSDK.CreateChannel(channel, mfToken)
+		if err != nil {
+			log.Fatalf(err.Error())
+			fmt.Println(err)
+			return nil, err
+		}
+		chanPage, err = mainfluxSDK.Channels(mfToken, 0, 5, channel.Name)
+		if err != nil {
+			// log.Fatalf(err.Error())
+			fmt.Println(err.Error())
+			return nil, err
+		}
+	}
+	if chanPage.Total == 1 {
+		controlChannel = chanPage.Channels[0]
+	} else {
+		log.Fatalf("create channel failed\n")
+		return nil, err
+	}
+
+	exportChanmelName := deviceName + "exportChannel"
+	chanPage, err = mainfluxSDK.Channels(mfToken, 0, 5, exportChanmelName)
+	if err != nil {
+		// log.Fatalf(err.Error())
+		fmt.Println(err.Error())
+		return nil, err
+	}
+	if chanPage.Total > 1 {
+		for _, chann := range chanPage.Channels {
+			err := mainfluxSDK.DeleteChannel(chann.ID, mfToken)
+			if err != nil {
+				// log.Fatalf(err.Error())
+				fmt.Println(err.Error())
+				return nil, err
+			}
+		}
+	}
+	if (chanPage.Total == 0) || (chanPage.Total > 1) {
+		var channel = sdk.Channel{
+			ID:   "1",
+			Name: exportChanmelName,
+		}
+		_, err = mainfluxSDK.CreateChannel(channel, mfToken)
+		if err != nil {
+			log.Fatalf(err.Error())
+			return nil, err
+		}
+		chanPage, err = mainfluxSDK.Channels(mfToken, 0, 5, channel.Name)
+		if err != nil {
+			// log.Fatalf(err.Error())
+			fmt.Println(err.Error())
+			return nil, err
+		}
+	}
+	if chanPage.Total == 1 {
+		exportChannel = chanPage.Channels[0]
+	} else {
+		log.Fatalf("create channel failed\n")
+	}
+	conIDs := sdk.ConnectionIDs{
+		ChannelIDs: []string{exportChannel.ID, controlChannel.ID},
+		ThingIDs:   []string{mfThing.ID},
+	}
+	chanPage, err = mainfluxSDK.ChannelsByThing(mfToken, mfThing.ID, 0, uint64(len(conIDs.ChannelIDs)))
+	if err != nil {
+		// log.Fatalf(err.Error())
+		fmt.Println(err.Error())
+		return nil, err
+	}
+	if chanPage.Total == 0 {
+		err = mainfluxSDK.Connect(conIDs, mfToken)
+		if err != nil {
+			fmt.Println(err.Error())
+
+		}
+	} else {
+		conIDsTmp := sdk.ConnectionIDs{
+			ThingIDs: []string{mfThing.ID},
+		}
+		flag := false
+		for _, codID := range conIDs.ChannelIDs {
+			flag = false
+			for _, chann := range chanPage.Channels {
+				if chann.ID == codID {
+					flag = true
+					break
+				}
+			}
+			if flag == false {
+				conIDsTmp.ChannelIDs = append(conIDsTmp.ChannelIDs, codID)
+			}
+		}
+
+		for _, chann := range chanPage.Channels {
+			flag = false
+			for _, codID := range conIDs.ChannelIDs {
+				if chann.ID == codID {
+					flag = true
+					break
+				}
+			}
+			if flag == false {
+				fmt.Printf("DisconnectThing:")
+				fmt.Printf("thing.ID %s,chan_id %s\n", mfThing.ID, chann.ID)
+				mainfluxSDK.DisconnectThing(mfThing.ID, chann.ID, mfToken)
+			}
+		}
+		fmt.Println(conIDsTmp)
+		if len(conIDsTmp.ChannelIDs) != 0 {
+			err = mainfluxSDK.Connect(conIDsTmp, mfToken)
+			if err != nil {
+				fmt.Println(err.Error())
+				return nil, err
+			}
+		}
+	}
+	return &agent.Device{
+		MfSdk:          mainfluxSDK,
+		Thing:          mfThing,
+		ControlChannel: controlChannel,
+		ExportChannel:  exportChannel,
+		MfToken:        mfToken,
+	}, nil
+}
 func loadEnvConfig() (agent.Config, error) {
 	sc := agent.ServerConfig{
 		NatsURL: mainflux.Env(envNatsURL, defNatsURL),
@@ -226,7 +463,11 @@ func loadEnvConfig() (agent.Config, error) {
 	}
 
 	file := mainflux.Env(envConfigFile, defConfigFile)
-	c := agent.NewConfig(sc, cc, ec, lc, mc, ch, ct, file)
+	bc := export.BoardConfig{
+		BoardName: mainflux.Env(envBoardName, defBoardName),
+		Token:     mainflux.Env(envToken, defToken),
+	}
+	c := agent.NewConfig(sc, cc, ec, lc, mc, ch, ct, file, bc)
 	mc, err = loadCertificate(c.MQTT)
 	if err != nil {
 		return c, errors.Wrap(errFailedToSetupMTLS, err)
@@ -250,7 +491,7 @@ func loadBootConfig(c agent.Config, logger logger.Logger) (bsc agent.Config, err
 		SkipTLS:       skipTLS,
 	}
 
-	if err := bootstrap.Bootstrap(bsConfig, logger, file); err != nil {
+	if err := bootstrap.Bootstrap(bsConfig, logger, file, c); err != nil {
 		return c, errors.Wrap(errFetchingBootstrapFailed, err)
 	}
 
